@@ -1,0 +1,11 @@
+# .gitignore
+server
+client
+cleint
+temp
+test
+vis
+*.out
+*.o
+build/
+bin/
