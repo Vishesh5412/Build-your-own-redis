@@ -1,13 +1,21 @@
-#include <bits/stdc++.h>
-#include <fcntl.h>
+#include <vector>
+#include <string>
+#include <map>
+
+#include <string.h>
+#include <assert.h>
+
 #include <sys/socket.h>
-#include <netinet/in.h>
-#include <netinet/ip.h>
 #include <sys/poll.h>
+#include <fcntl.h>
+#include <netinet/ip.h>
+#include <unistd.h>
 
 using namespace std;
 const int PORT_NO = 6969;
-const size_t k_max_msg = 32 << 20; 
+const size_t k_max_msg = 32 << 20; // likely larger than the kernel buffer
+const size_t max_nsts = 3;
+static map<string, string> g_data;
 
 struct Buffer
 {
@@ -29,11 +37,23 @@ struct Conn
 
     Buffer *outgoing_buffer = new Buffer();
 
-    ~Conn() // prevent memory leaks by deleting pointers
+    ~Conn() // prevent memory leaks
     {
         delete incoming_buffer;
         delete outgoing_buffer;
     }
+};
+
+enum
+{
+    RES_OK = 0,
+    RES_ERR = 1,
+    RES_NX = 2
+};
+struct Response
+{
+    uint32_t status = 0;
+    std::vector<uint8_t> data;
 };
 
 static void die(string message)
@@ -92,32 +112,91 @@ static Conn *handle_accept(int fd)
     return conn;
 }
 
+static void parse_req(const Conn *conn, vector<string> &cmd)
+{
+    Buffer *buffer = conn->incoming_buffer;
+
+    int32_t total_len;
+    uint8_t *curr = buffer->arr.data() + buffer->data_begin;
+    memcpy(&total_len, curr, 4);
+
+    uint8_t *en = curr + total_len;
+    curr += 4;
+
+    while (curr != en)
+    {
+        uint32_t len;
+        memcpy(&len, curr, 4);
+
+        curr += 4;
+        string str(reinterpret_cast<const char *>(curr),
+                   reinterpret_cast<const char *>(curr + len));
+
+        cmd.push_back(str);
+        curr += len;
+    }
+}
+
+static void send_res(Buffer *buffer, const Response *res)
+{
+    uint32_t len = 4 + res->data.size();
+    buf_append(buffer, (uint8_t *)&len, 4);
+    buf_append(buffer, (uint8_t *)&(res->status), 4);
+    buf_append(buffer, (uint8_t *)res->data.data(), res->data.size());
+}
+
+static void handle_req(const vector<string> &cmd, Response *res)
+{
+    if (cmd[0] == "GET" && cmd.size() == 2)
+    {
+        if (!g_data.count(cmd[1]))
+        {
+            res->status |= RES_NX;
+            return;
+        }
+        string _v = g_data[cmd[1]];
+        res->data.assign(_v.begin(), _v.end());
+        res->status |= RES_OK;
+    }
+    else if (cmd[0] == "SET" && cmd.size() == 3)
+    {
+        g_data[cmd[1]] = cmd[2];
+        res->data.assign(cmd[2].begin(), cmd[2].end());
+        res->status |= RES_OK;
+    }
+    else if (cmd[0] == "DEL" && cmd.size() == 2)
+    {
+        g_data.erase(cmd[1]);
+        res->status |= RES_OK;
+    }
+    else
+        res->status |= RES_ERR;
+}
+
 static bool try_one_request(Conn *conn)
 {
     Buffer *buffer = conn->incoming_buffer;
     if (buffer->size() < 4)
-    {
-        return false;
-    }
-    uint32_t len;
-    memcpy(&len, buffer->arr.data() + buffer->data_begin, 4);
-
-    if (len + 4 > k_max_msg)
-    {
-        fprintf(stderr, "Msg too large");
-        conn->want_close = true;
-        return false;
-    }
-
-    if (buffer->size() < len + 4)
         return false;
 
-    printf("client says: %.*s\n", len < 100 ? len : 100, buffer->arr.data() + buffer->data_begin + 4);
+    uint8_t *curr = buffer->arr.data() + buffer->data_begin;
 
-    buf_append(conn->outgoing_buffer, (const uint8_t *)&len, 4);
-    buf_append(conn->outgoing_buffer, buffer->arr.data() + buffer->data_begin + 4, len);
-    buf_consume(conn->incoming_buffer, (size_t)len + 4);
+    uint32_t len; // total length of req
+    memcpy(&len, curr, 4);
 
+    curr += 4;
+
+    if (buffer->size() < len)
+        return false;
+
+    vector<string> cmd;
+    parse_req(conn, cmd);
+
+    Response *res = new Response();
+    handle_req(cmd, res);
+
+    send_res(conn->outgoing_buffer, res);
+    buf_consume(buffer, size_t(len) + 4);
     return true;
 }
 
@@ -136,7 +215,7 @@ static void handle_write(Conn *conn)
         return;
     }
 
-    buf_consume(conn->outgoing_buffer, (size_t)rv);
+    buf_consume(buffer, (size_t)rv);
 
     if (buffer->empty())
     {
@@ -149,6 +228,7 @@ static void handle_read(Conn *conn)
 {
     uint8_t buf[64 * 1024];
     ssize_t rv = read(conn->fd, buf, sizeof(buf));
+
     if (rv == -1)
     {
         if (errno != EAGAIN)
@@ -175,7 +255,6 @@ static void handle_read(Conn *conn)
     }
 
     buf_append(buffer, buf, (size_t)rv);
-    // cout << "rv is " << rv << endl;
     while (try_one_request(conn))
     {
     };
@@ -218,7 +297,6 @@ int main()
     int cnt = 0;
     while (1)
     {
-        // cout << "event loop: " << (cnt++) << endl;
         poll_args.clear();
 
         poll_args.push_back({fd, POLLIN, 0}); // new connection treated as "read"
