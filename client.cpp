@@ -2,7 +2,7 @@
 #include <vector>
 
 #include <string.h>
-#include  <assert.h>
+#include <assert.h>
 
 #include <sys/socket.h>
 #include <netinet/ip.h>
@@ -147,20 +147,24 @@ int main()
         die("connect()");
     }
 
-    vector<vector<string>> cmd = {{"SET", "A", "APPLE"},
-                                  {"SET", "B", "BOMBAY"},
-                                  {"DEL", "B"},
-                                  {"GET", "B"},
-                                  {"DEL", "A"},
-                                  {"GET", "A"}};
+    vector<vector<string>> cmd = {
+        {"SET", "A", "APPLE"},
+        {"SET", "B", "BOMBAY"},
+        //   {"DEL", "B"},
+        //   {"GET", "B"},
+        //   {"DEL", "A"},
+        //   {"GET", "A"}
+    };
 
-    for (int i = 0; i < cmd.size(); i++)
-    {
-        rv = send_req(fd, cmd[i]);
-        if (rv < 0)
-            die("send_req()");
-        read_res(fd);
-    }
+    send_req(fd, cmd[0]);
+    send_req(fd, cmd[1]);
+    // for (int i = 0; i < cmd.size(); i++)
+    // {
+    //     rv = send_req(fd, cmd[i]);
+    //     if (rv < 0)
+    //         die("send_req()");
+    //     read_res(fd);
+    // }
 
     close(fd);
     return 0;
