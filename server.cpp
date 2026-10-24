@@ -11,6 +11,9 @@
 #include <netinet/ip.h>
 #include <unistd.h>
 
+#include <ostream>
+#include <iostream>
+
 using namespace std;
 const int PORT_NO = 6969;
 const size_t k_max_msg = 32 << 20; // likely larger than the kernel buffer
@@ -44,16 +47,18 @@ struct Conn
     }
 };
 
+struct Response
+{
+    uint32_t status = 0;
+    std::vector<uint8_t> data;
+};
+
+// response flags
 enum
 {
     RES_OK = 0,
     RES_ERR = 1,
     RES_NX = 2
-};
-struct Response
-{
-    uint32_t status = 0;
-    std::vector<uint8_t> data;
 };
 
 static void die(string message)
@@ -175,6 +180,7 @@ static void handle_req(const vector<string> &cmd, Response *res)
 
 static bool try_one_request(Conn *conn)
 {
+
     Buffer *buffer = conn->incoming_buffer;
     if (buffer->size() < 4)
         return false;
@@ -183,20 +189,21 @@ static bool try_one_request(Conn *conn)
 
     uint32_t len; // total length of req
     memcpy(&len, curr, 4);
-
+    
     curr += 4;
-
+    
     if (buffer->size() < len)
-        return false;
-
+    return false;
+    
     vector<string> cmd;
     parse_req(conn, cmd);
-
+    
     Response *res = new Response();
     handle_req(cmd, res);
-
+     
     send_res(conn->outgoing_buffer, res);
-    buf_consume(buffer, size_t(len) + 4);
+    buf_consume(buffer, size_t(len));
+
     return true;
 }
 
@@ -222,6 +229,7 @@ static void handle_write(Conn *conn)
         conn->want_write = false;
         conn->want_read = true;
     }
+
 }
 
 static void handle_read(Conn *conn)
@@ -258,7 +266,7 @@ static void handle_read(Conn *conn)
     while (try_one_request(conn))
     {
     };
-
+    
     if (!conn->outgoing_buffer->empty())
     {
         conn->want_write = true;
