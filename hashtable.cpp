@@ -10,11 +10,10 @@ static void h_init(HTab *htab, size_t n)
     htab->mask = n - 1;
 }
 
-
 static void h_insert(HTab *htab, HNode *hnode)
 {
     uint64_t hcode = hnode->hcode;
-    
+
     size_t idx = (int)hcode & htab->mask;
     HNode *node = htab->tab[idx];
     hnode->next = node;
@@ -22,10 +21,30 @@ static void h_insert(HTab *htab, HNode *hnode)
     htab->size++;
 }
 
-static void h_detach(HTab *htab, int idx) // updated it
+// to detach any HNode, provided from pointing towards the next pointer of its parent
+static HNode *h_detach(HTab *htab, HNode **from) // check memory leak
 {
-    htab->tab[idx] = htab->tab[idx]->next;
+    HNode *node = *from;
+    *from = node->next;
     htab->size--;
+    return node;
+}
+
+static HNode **h_lookup(HTab *htab, HNode *key, bool (*eq)(HNode *, HNode *))
+{
+    if (!htab->tab)
+        return NULL;
+    size_t pos = key->hcode & htab->mask;
+
+    HNode *curr = htab->tab[pos], **from = &(htab->tab[pos]);
+    while (curr)
+    {
+        if (curr->hcode == key->hcode && eq(curr, key))
+            return from;
+        from = &(curr->next);
+        curr = curr->next;
+    }
+    return NULL;
 }
 
 static void h_trigger_rehashing(HMap *hmap)
@@ -52,9 +71,7 @@ static void hm_help_rehashing(HMap *hmap)
             idx = hmap->migrate_pos;
         }
 
-        HNode *hnode = hmap->older.tab[idx];
-        h_detach(&(hmap->older), idx);
-        h_insert(&(hmap->newer), hnode);
+        h_insert(&(hmap->newer), h_detach(&(hmap->older), &(hmap->older.tab[idx])));
         curr_work++;
     }
 
@@ -64,6 +81,17 @@ static void hm_help_rehashing(HMap *hmap)
         hmap->migrate_pos = 0;
         hmap->older = HTab{};
     }
+}
+
+HNode *hm_lookup(HMap *hmap, HNode *key, bool (*eq)(HNode *, HNode *))
+{
+    hm_help_rehashing(hmap);
+    HNode **from = h_lookup(&(hmap->newer), key, eq);
+    if (!from)
+    {
+        from = h_lookup(&(hmap->older), key, eq);
+    }
+    return from ? *from : NULL;
 }
 
 static void hm_insert(HMap *hmap, HNode *hnode)
@@ -82,6 +110,24 @@ static void hm_insert(HMap *hmap, HNode *hnode)
     hm_help_rehashing(hmap);
 }
 
+HNode *hm_delete(HMap *hmap, HNode *key, bool (*eq)(HNode *, HNode *))
+{
+    hm_help_rehashing(hmap);
+    if (HNode **from = h_lookup(&(hmap->newer), key, eq))
+    {
+        return h_detach(&(hmap->newer), from);
+    }
+    if (HNode **from = h_lookup(&(hmap->older), key, eq))
+    {
+        return h_detach(&(hmap->older), from);
+    }
+    return NULL;
+}
+
+size_t hm_size(HMap *hmap)
+{
+    return (hmap->newer.size + hmap->older.size);
+}
 
 void hm_clear(HMap *hmap)
 {
@@ -89,8 +135,3 @@ void hm_clear(HMap *hmap)
     free(hmap->older.tab);
     *hmap = HMap{};
 } // check for memory leak
-
-size_t hm_size(HMap *hmap)
-{
-    return (hmap->newer.size + hmap->older.size);
-}
