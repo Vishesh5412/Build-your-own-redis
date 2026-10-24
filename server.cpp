@@ -11,14 +11,15 @@
 #include <netinet/ip.h>
 #include <unistd.h>
 
-#include <ostream>
-#include <iostream>
+#include "hashtable.h"
 
 using namespace std;
 const int PORT_NO = 6969;
 const size_t k_max_msg = 32 << 20; // likely larger than the kernel buffer
 const size_t max_nsts = 3;
-static map<string, string> g_data;
+
+#define container_of(ptr, T, member) \
+    ((T *)((char *)ptr - offsetof(T, member)))
 
 struct Buffer
 {
@@ -60,6 +61,8 @@ enum
     RES_ERR = 1,
     RES_NX = 2
 };
+
+// global states ie. might store more struct obj in future
 
 static void die(string message)
 {
@@ -150,29 +153,101 @@ static void send_res(Buffer *buffer, const Response *res)
     buf_append(buffer, (uint8_t *)res->data.data(), res->data.size());
 }
 
+static struct
+{
+    HMap db; // top-level hashtable
+} g_data;
+
+struct Entry
+{
+    struct HNode node; // hashtable node
+    string key;
+    string val;
+};
+
+// FNV hash
+static uint64_t str_hash(const uint8_t *data, size_t len)
+{
+    uint32_t h = 0x811C9DC5;
+    for (size_t i = 0; i < len; i++)
+    {
+        h = (h + data[i]) * 0x01000193; // it is fnv prime
+    }
+    return h;
+}
+
+// to check whether two node with same hash are actually same
+bool eq(HNode *n1, HNode *n2)
+{
+    Entry *e1 = container_of(n1, Entry, node);
+    Entry *e2 = container_of(n2, Entry, node);
+    return (e1->key == e2->key);
+}
+
+void handle_get(string _k, Response *res)
+{
+    Entry e = {{}, _k};
+    e.node = {NULL, str_hash((uint8_t *)_k.c_str(), _k.length())};
+
+    HNode *hnode = hm_lookup(&(g_data.db), &(e.node), &eq);
+    res->status |= (hnode ? RES_OK : RES_NX);
+    if (hnode)
+    {
+        Entry *e = container_of(hnode, Entry, node);
+        res->data.assign(e->val.begin(), e->val.end());
+    }
+}
+
+void handle_set(string _k, string _v, Response *res)
+{
+    Entry e = {{}, _k, _v};
+    e.node = {NULL, str_hash((uint8_t *)_k.c_str(), _k.length())};
+    HNode *hnode = hm_lookup(&(g_data.db), &(e.node), &eq);
+
+    // heap allocation req. instead of stack
+    Entry *entry = new Entry();
+    entry->node = {NULL, str_hash((uint8_t *)_k.c_str(), _k.length())};
+    if (hnode)
+    {
+        container_of(hnode, Entry, node)->val = _v;
+    }
+    else
+    {
+        entry->key = _k;
+        entry->val = _v;
+        hm_insert(&(g_data.db), &(entry->node));
+    }
+
+    res->data.assign(_v.begin(), _v.end());
+    res->status |= RES_OK;
+}
+
+void handle_del(string _k, Response *res)
+{
+    Entry e = {{}, _k};
+    e.node = {NULL, str_hash((uint8_t *)_k.c_str(), _k.length())};
+    HNode *to_del = hm_delete(&(g_data.db), &(e.node), &eq);
+    if (to_del)
+    {
+        to_del->next = NULL;
+        delete container_of(to_del, Entry, node);
+    }
+    res->status |= RES_OK;
+}
+
 static void handle_req(const vector<string> &cmd, Response *res)
 {
     if (cmd[0] == "GET" && cmd.size() == 2)
     {
-        if (!g_data.count(cmd[1]))
-        {
-            res->status |= RES_NX;
-            return;
-        }
-        string _v = g_data[cmd[1]];
-        res->data.assign(_v.begin(), _v.end());
-        res->status |= RES_OK;
+        handle_get(cmd[1], res);
     }
     else if (cmd[0] == "SET" && cmd.size() == 3)
     {
-        g_data[cmd[1]] = cmd[2];
-        res->data.assign(cmd[2].begin(), cmd[2].end());
-        res->status |= RES_OK;
+        handle_set(cmd[1], cmd[2], res);
     }
     else if (cmd[0] == "DEL" && cmd.size() == 2)
     {
-        g_data.erase(cmd[1]);
-        res->status |= RES_OK;
+        handle_del(cmd[1], res);
     }
     else
         res->status |= RES_ERR;
@@ -189,18 +264,24 @@ static bool try_one_request(Conn *conn)
 
     uint32_t len; // total length of req
     memcpy(&len, curr, 4);
-    
+    if (len > k_max_msg)
+    {
+        fprintf(stderr, "msg too long !! \n");
+        conn->want_close = true;
+        return false;
+    }
+
     curr += 4;
-    
+
     if (buffer->size() < len)
-    return false;
-    
+        return false;
+
     vector<string> cmd;
     parse_req(conn, cmd);
-    
+
     Response *res = new Response();
     handle_req(cmd, res);
-     
+
     send_res(conn->outgoing_buffer, res);
     buf_consume(buffer, size_t(len));
 
@@ -229,7 +310,6 @@ static void handle_write(Conn *conn)
         conn->want_write = false;
         conn->want_read = true;
     }
-
 }
 
 static void handle_read(Conn *conn)
@@ -266,7 +346,7 @@ static void handle_read(Conn *conn)
     while (try_one_request(conn))
     {
     };
-    
+
     if (!conn->outgoing_buffer->empty())
     {
         conn->want_write = true;

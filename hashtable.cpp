@@ -5,7 +5,7 @@
 const size_t k_max_load_factor = 8;
 static void h_init(HTab *htab, size_t n)
 {
-    assert(n & (n - 1) == 0);
+    assert((n & (n - 1)) == 0);
     htab->tab = (HNode **)calloc(n, sizeof(HNode *));
     htab->mask = n - 1;
 }
@@ -22,7 +22,7 @@ static void h_insert(HTab *htab, HNode *hnode)
 }
 
 // to detach any HNode, provided from pointing towards the next pointer of its parent
-static HNode *h_detach(HTab *htab, HNode **from) // check memory leak
+static HNode *h_detach(HTab *htab, HNode **from) // memory leak handle else_where
 {
     HNode *node = *from;
     *from = node->next;
@@ -35,12 +35,14 @@ static HNode **h_lookup(HTab *htab, HNode *key, bool (*eq)(HNode *, HNode *))
     if (!htab->tab)
         return NULL;
     size_t pos = key->hcode & htab->mask;
-
+   
     HNode *curr = htab->tab[pos], **from = &(htab->tab[pos]);
     while (curr)
     {
-        if (curr->hcode == key->hcode && eq(curr, key))
+        if (curr->hcode == key->hcode && eq(curr, key)) {
             return from;
+
+        }
         from = &(curr->next);
         curr = curr->next;
     }
@@ -49,7 +51,7 @@ static HNode **h_lookup(HTab *htab, HNode *key, bool (*eq)(HNode *, HNode *))
 
 static void h_trigger_rehashing(HMap *hmap)
 {
-    assert((hmap->older).tab == NULL); // check leakage
+    assert((hmap->older).tab == NULL);
     size_t sz = (hmap->newer).size;
 
     hmap->older = hmap->newer;
@@ -85,6 +87,7 @@ static void hm_help_rehashing(HMap *hmap)
 
 HNode *hm_lookup(HMap *hmap, HNode *key, bool (*eq)(HNode *, HNode *))
 {
+
     hm_help_rehashing(hmap);
     HNode **from = h_lookup(&(hmap->newer), key, eq);
     if (!from)
@@ -94,11 +97,11 @@ HNode *hm_lookup(HMap *hmap, HNode *key, bool (*eq)(HNode *, HNode *))
     return from ? *from : NULL;
 }
 
-static void hm_insert(HMap *hmap, HNode *hnode)
+void hm_insert(HMap *hmap, HNode *key)
 {
     if (!hmap->newer.tab)
         h_init(&(hmap->newer), 4); // intital tab size 4
-    h_insert(&(hmap->newer), hnode);
+    h_insert(&(hmap->newer), key);
 
     if (!hmap->older.tab) // if already rehashing is taking place
     {
@@ -134,4 +137,4 @@ void hm_clear(HMap *hmap)
     free(hmap->newer.tab);
     free(hmap->older.tab);
     *hmap = HMap{};
-} // check for memory leak
+}

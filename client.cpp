@@ -9,7 +9,6 @@
 #include <unistd.h>
 
 using namespace std;
-const size_t MAX_MESSAGE_SIZE = 4096;
 const int PORT_NO = 6969;
 
 static void die(string message)
@@ -148,14 +147,16 @@ int main()
     }
 
     vector<vector<string>> cmd = {
-        {"SET", "A", "APPLE"},
-        {"ST", "B", "BOMBAY"},
-          {"DEL", "B"},
+        {"SET", "A", "sdf"},
+        {"SET", "B", "BOMBAY"},
+        {"SET", "C", "CHENNAI"},
+          {"GET", "A"},
           {"GET", "B"},
+        //   {"GET", "C"},
           {"DEL", "A"},
           {"GET", "A"}
     };
-
+    
     for (int i = 0; i < cmd.size(); i++)
     {
         rv = send_req(fd, cmd[i]);
