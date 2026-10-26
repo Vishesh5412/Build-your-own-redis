@@ -35,13 +35,13 @@ static HNode **h_lookup(HTab *htab, HNode *key, bool (*eq)(HNode *, HNode *))
     if (!htab->tab)
         return NULL;
     size_t pos = key->hcode & htab->mask;
-   
+
     HNode *curr = htab->tab[pos], **from = &(htab->tab[pos]);
     while (curr)
     {
-        if (curr->hcode == key->hcode && eq(curr, key)) {
+        if (curr->hcode == key->hcode && eq(curr, key))
+        {
             return from;
-
         }
         from = &(curr->next);
         curr = curr->next;
@@ -82,6 +82,21 @@ static void hm_help_rehashing(HMap *hmap)
         free(hmap->older.tab);
         hmap->migrate_pos = 0;
         hmap->older = HTab{};
+    }
+}
+
+void h_foreach(HTab *htab, void *buffer, void (*cb_keys)(void *, HNode *))
+{
+    for (size_t i = 0; i < htab->mask + 1; i++)
+    {
+        if (!htab->tab[i])
+            continue;
+        HNode *curr = htab->tab[i];
+        while (curr)
+        {
+            cb_keys(buffer, curr);
+            curr = curr->next;
+        }
     }
 }
 
@@ -137,4 +152,17 @@ void hm_clear(HMap *hmap)
     free(hmap->newer.tab);
     free(hmap->older.tab);
     *hmap = HMap{};
+}
+
+void hm_foreach(HMap *hmap, void *buffer, void (*cb_keys)(void *, HNode *))
+{
+    hm_help_rehashing(hmap);
+
+    // iterating older
+    if (hmap->older.tab)
+        h_foreach(&(hmap->older), buffer, cb_keys);
+
+    // iterating newer
+    if (hmap->newer.tab)
+        h_foreach(&(hmap->newer), buffer, cb_keys);
 }

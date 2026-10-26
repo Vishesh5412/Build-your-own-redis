@@ -13,7 +13,7 @@
 
 #include "hashtable.h"
 
-// #include <iostream>
+#include <iostream>
 
 using namespace std;
 const int PORT_NO = 6969;
@@ -66,7 +66,6 @@ enum
     TAG_DBL = 4, // double
     TAG_ARR = 5, // array
 };
-
 
 static void die(string message)
 {
@@ -221,6 +220,14 @@ static void out_arr(Buffer *out, uint32_t sz)
     buf_append(out, (uint8_t *)&sz, 4);
 }
 
+void cb_keys(void *buffer, HNode *hnode)
+{ // callback fxn
+    Buffer *out = (Buffer *)buffer;
+    Entry *entry = container_of(hnode, Entry, node);
+    string _k = entry->key;
+    out_str(out, (uint8_t *)_k.data(), _k.length());
+}
+
 void handle_get(Buffer *out, string _k)
 {
     Entry e = {{}, _k};
@@ -271,6 +278,19 @@ void handle_del(Buffer *out, string _k)
     return out_int(out, 0);
 }
 
+void handle_keys(Buffer *out)
+{
+    size_t sz = hm_size(&(g_data.db));
+    out_arr(out, (uint32_t)sz);
+    hm_foreach(&(g_data.db), out, &cb_keys);
+}
+
+void handle_size(Buffer *out)
+{
+    size_t sz = hm_size(&(g_data.db));
+    out_int(out, (uint64_t)sz);
+}
+
 void req_st(Buffer *out)
 {
     size_t dummy_sz = 0;
@@ -293,6 +313,10 @@ void req_en(Buffer *out)
 
 static void handle_req(Buffer *out, const vector<string> &cmd)
 {
+    if (cmd.empty())
+    {
+        return out_err(out, static_cast<uint8_t>(ERR_UNKNOWN), "invalid command !! \n");
+    }
     if (cmd[0] == "get" && cmd.size() == 2)
     {
         return handle_get(out, cmd[1]);
@@ -305,7 +329,14 @@ static void handle_req(Buffer *out, const vector<string> &cmd)
     {
         return handle_del(out, cmd[1]);
     }
-
+    if (cmd[0] == "keys" && cmd.size() == 1)
+    {
+        return handle_keys(out);
+    }
+    if (cmd[0] == "size" && cmd.size() == 1)
+    {
+        return handle_size(out);
+    }
     return out_err(out, static_cast<uint8_t>(ERR_UNKNOWN), "invalid command !! \n");
 }
 
@@ -336,6 +367,13 @@ static bool try_one_request(Conn *conn)
     parse_req(conn, cmd);
 
     Buffer *out_buffer = conn->outgoing_buffer;
+    // if (cmd.size() == 0)
+    // {
+    //     out_err(out_buffer, ERR_UNKNOWN, "invalid command !!");
+    //     conn->want_close = true;
+    //     return false;
+    // }
+
     req_st(out_buffer); // saving first 4 bytes to store overall size
     handle_req(out_buffer, cmd);
     req_en(out_buffer); // will paste the overall size to output buffer
@@ -348,6 +386,7 @@ static bool try_one_request(Conn *conn)
 static void handle_write(Conn *conn)
 {
     Buffer *buffer = conn->outgoing_buffer;
+
     assert(!buffer->empty());
     ssize_t rv = write(conn->fd, buffer->arr.data() + buffer->data_begin, buffer->size());
     if (rv == -1)

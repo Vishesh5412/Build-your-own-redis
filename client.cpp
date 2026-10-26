@@ -8,8 +8,8 @@
 #include <netinet/ip.h>
 #include <unistd.h>
 
-// #include <iostream>
-// #include <ostream>
+#include <iostream>
+#include <ostream>
 
 using namespace std;
 const int PORT_NO = 6969;
@@ -87,6 +87,7 @@ static int32_t send_req(int fd, vector<string> &cmd)
     memcpy(curr, &total_len, 4);
     curr += 4;
 
+
     for (size_t i = 0; i < nsts; i++)
     {
         uint32_t len = (uint32_t)cmd[i].length();
@@ -94,7 +95,7 @@ static int32_t send_req(int fd, vector<string> &cmd)
         memcpy(curr + 4, cmd[i].data(), len);
         curr += (4 + len);
     }
-
+    
     int32_t rv = write_all(fd, (char *)w_buf, 4 + total_len);
     if (rv)
     {
@@ -111,7 +112,7 @@ static size_t read_res(int fd)
 
     if (rv)
     {
-        msg("read() errror \n");
+        msg("read() error \n");
         return 0;
     }
 
@@ -130,13 +131,13 @@ static size_t read_res(int fd)
     {
     case TAG_NIL:
         msg("(nil)");
-        return 1;
+        return 0;
 
     case TAG_ERR:
         if (sz < 1 + 4)
         {
             msg("bad response()");
-            return 0;
+            return 1;
         }
 
         uint8_t ERR_CODE;
@@ -148,17 +149,17 @@ static size_t read_res(int fd)
         if (sz < 1 + 1 + 4 + msg_len)
         {
             msg("bad response()");
-            return 0;
+            return 1;
         }
         printf("(err) [%d] %.*s", ERR_CODE, msg_len, &r_buf[1 + 1 + 4]);
-        return 1;
+        return 0;
 
     case TAG_STR:
     {
         if (sz < 1 + 4)
         {
             msg("bad response()");
-            return 0;
+            return 1;
         }
 
         uint32_t msg_len;
@@ -166,11 +167,11 @@ static size_t read_res(int fd)
         if (sz < 1 + 4 + msg_len)
         {
             msg("bad response()");
-            return 0;
+            return 1;
         }
 
         printf("(str) %.*s \n", msg_len, &r_buf[1 + 4]);
-        return 1;
+        return 0;
     }
 
     case TAG_INT:
@@ -178,14 +179,48 @@ static size_t read_res(int fd)
         if (sz < 1 + 8)
         {
             msg("bad response()");
-            return 0;
+            return 1;
         }
 
         uint64_t val;
         memcpy(&val, &r_buf[1], 8);
         printf("(int) %ld \n", val);
+        return 1;
     }
 
+    case TAG_ARR:
+    {
+        if (sz < 1 + 4)
+        {
+            msg("bad response()");
+            return 1;
+        }
+
+        uint32_t len;
+        memcpy(&len, &r_buf[1], 4);
+        printf("(arr) ");
+
+        if (len == 0)
+            return 0;
+
+        size_t _pos_ = 1 + 4;
+        for (int i = 0; i < len; i++)
+        {
+            uint8_t TAG;
+            memcpy(&TAG, &r_buf[_pos_], 1);
+
+            _pos_ += 1;
+            uint32_t msg_len;
+            memcpy(&msg_len, &r_buf[_pos_], 4);
+
+            _pos_ += 4;
+            printf("%.*s ", msg_len, &r_buf[_pos_]);
+
+            _pos_ += msg_len;
+        }
+        printf("\n");
+        return 1;
+    }
     default:
         printf("bad response() \n");
     }

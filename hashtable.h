@@ -28,3 +28,4 @@ void hm_insert(HMap *hmap, HNode *key);
 HNode *hm_delete(HMap *hmap, HNode *key, bool (*eq)(HNode *, HNode *));
 size_t hm_size(HMap *hmap);
 void hm_clear(HMap *hmap);
+void hm_foreach(HMap *hmap, void *buffer, void (*cb_keys)(void *, HNode *));
