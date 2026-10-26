@@ -8,8 +8,25 @@
 #include <netinet/ip.h>
 #include <unistd.h>
 
+// #include <iostream>
+// #include <ostream>
+
 using namespace std;
 const int PORT_NO = 6969;
+enum
+{
+    TAG_NIL = 0, // nil
+    TAG_ERR = 1, // error code + msg
+    TAG_STR = 2, // string
+    TAG_INT = 3, // int64
+    TAG_DBL = 4, // double
+    TAG_ARR = 5, // array
+};
+
+static void msg(const char *msg)
+{
+    fprintf(stderr, "%s\n", msg);
+}
 
 static void die(string message)
 {
@@ -56,7 +73,7 @@ static uint32_t max_len = 4096;
 
 static int32_t send_req(int fd, vector<string> &cmd)
 {
-    uint32_t total_len = 4;
+    uint32_t total_len = 0;
 
     for (string str : cmd)
         total_len += (4 + (uint32_t)str.length());
@@ -78,7 +95,7 @@ static int32_t send_req(int fd, vector<string> &cmd)
         curr += (4 + len);
     }
 
-    int32_t rv = write_all(fd, (char *)w_buf, total_len);
+    int32_t rv = write_all(fd, (char *)w_buf, 4 + total_len);
     if (rv)
     {
         die("write_all()");
@@ -87,47 +104,96 @@ static int32_t send_req(int fd, vector<string> &cmd)
     return 0;
 }
 
-static void read_res(int fd)
+static size_t read_res(int fd)
 {
+    uint32_t sz;
+    int32_t rv = read_all(fd, (char *)&sz, 4); // read 4 bytes for total_length
+
+    if (rv)
+    {
+        msg("read() errror \n");
+        return 0;
+    }
+
     char r_buf[max_len] = {};
-
-    int32_t rv = read_all(fd, r_buf, 4);
-    if (rv < 0)
+    rv = read_all(fd, r_buf, (size_t)sz);
+    if (rv)
     {
-        die("read_all()");
+        msg("read() errror \n");
+        return 0;
     }
 
-    uint32_t len;
-    memcpy(&len, r_buf, 4);
+    uint8_t TAG;
+    memcpy(&TAG, r_buf, 1);
 
-    rv = read_all(fd, r_buf + 4, len);
-    if (rv < 0)
+    switch (TAG)
     {
-        die("read_all()");
+    case TAG_NIL:
+        msg("(nil)");
+        return 1;
+
+    case TAG_ERR:
+        if (sz < 1 + 4)
+        {
+            msg("bad response()");
+            return 0;
+        }
+
+        uint8_t ERR_CODE;
+        memcpy(&ERR_CODE, &r_buf[1], 1);
+
+        uint32_t msg_len;
+        memcpy(&msg_len, &r_buf[1 + 1], 4);
+
+        if (sz < 1 + 1 + 4 + msg_len)
+        {
+            msg("bad response()");
+            return 0;
+        }
+        printf("(err) [%d] %.*s", ERR_CODE, msg_len, &r_buf[1 + 1 + 4]);
+        return 1;
+
+    case TAG_STR:
+    {
+        if (sz < 1 + 4)
+        {
+            msg("bad response()");
+            return 0;
+        }
+
+        uint32_t msg_len;
+        memcpy(&msg_len, &r_buf[1], 4);
+        if (sz < 1 + 4 + msg_len)
+        {
+            msg("bad response()");
+            return 0;
+        }
+
+        printf("(str) %.*s \n", msg_len, &r_buf[1 + 4]);
+        return 1;
     }
 
-    uint32_t status = 0;
-    memcpy(&status, &r_buf[4], 4);
+    case TAG_INT:
+    {
+        if (sz < 1 + 8)
+        {
+            msg("bad response()");
+            return 0;
+        }
 
-    string data;
-    if (len > 4)
-        data.assign(r_buf + 8, r_buf + 4 + len);
+        uint64_t val;
+        memcpy(&val, &r_buf[1], 8);
+        printf("(int) %ld \n", val);
+    }
 
-    if (status & 1)
-    {
-        fprintf(stderr, "ERROR \n");
+    default:
+        printf("bad response() \n");
     }
-    else if (status & 2)
-    {
-        fprintf(stderr, "KEY NOT FOUND \n");
-    }
-    else
-    {
-        fprintf(stderr, "SUCCESS: %s \n", data.c_str());
-    }
+
+    return 1;
 }
 
-int main()
+int main(int argc, char **argv)
 {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0)
@@ -146,24 +212,16 @@ int main()
         die("connect()");
     }
 
-    vector<vector<string>> cmd = {
-        {"SET", "A", "sdf"},
-        {"SET", "B", "BOMBAY"},
-        {"SET", "C", "CHENNAI"},
-          {"GET", "A"},
-          {"GET", "B"},
-        //   {"GET", "C"},
-          {"DEL", "A"},
-          {"GET", "A"}
-    };
-    
-    for (int i = 0; i < cmd.size(); i++)
+    vector<string> cmd;
+    for (int i = 1; i < argc; i++)
     {
-        rv = send_req(fd, cmd[i]);
-        if (rv < 0)
-            die("send_req()");
-        read_res(fd);
+        cmd.push_back(argv[i]);
     }
+
+    rv = send_req(fd, cmd);
+    if (rv < 0)
+        die("send_req()");
+    read_res(fd);
 
     close(fd);
     return 0;

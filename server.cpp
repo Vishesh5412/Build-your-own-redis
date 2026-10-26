@@ -13,6 +13,8 @@
 
 #include "hashtable.h"
 
+// #include <iostream>
+
 using namespace std;
 const int PORT_NO = 6969;
 const size_t k_max_msg = 32 << 20; // likely larger than the kernel buffer
@@ -48,25 +50,27 @@ struct Conn
     }
 };
 
-struct Response
-{
-    uint32_t status = 0;
-    std::vector<uint8_t> data;
-};
-
-// response flags
+// error code for TAG_ERR
 enum
 {
-    RES_OK = 0,
-    RES_ERR = 1,
-    RES_NX = 2
+    ERR_UNKNOWN = 1, // unknown command
+    ERR_TOO_BIG = 2, // response too big
 };
 
-// global states ie. might store more struct obj in future
+enum
+{
+    TAG_NIL = 0, // nil
+    TAG_ERR = 1, // error code + msg
+    TAG_STR = 2, // string
+    TAG_INT = 3, // int64
+    TAG_DBL = 4, // double
+    TAG_ARR = 5, // array
+};
+
 
 static void die(string message)
 {
-    fprintf(stderr, "[%d] %s", errno, message.c_str());
+    fprintf(stderr, "[%d] %s \n", errno, message.c_str());
     abort();
 }
 
@@ -128,7 +132,7 @@ static void parse_req(const Conn *conn, vector<string> &cmd)
     uint8_t *curr = buffer->arr.data() + buffer->data_begin;
     memcpy(&total_len, curr, 4);
 
-    uint8_t *en = curr + total_len;
+    uint8_t *en = curr + 4 + total_len;
     curr += 4;
 
     while (curr != en)
@@ -145,14 +149,7 @@ static void parse_req(const Conn *conn, vector<string> &cmd)
     }
 }
 
-static void send_res(Buffer *buffer, const Response *res)
-{
-    uint32_t len = 4 + res->data.size();
-    buf_append(buffer, (uint8_t *)&len, 4);
-    buf_append(buffer, (uint8_t *)&(res->status), 4);
-    buf_append(buffer, (uint8_t *)res->data.data(), res->data.size());
-}
-
+// global states ie. might store more struct obj in future
 static struct
 {
     HMap db; // top-level hashtable
@@ -184,21 +181,60 @@ bool eq(HNode *n1, HNode *n2)
     return (e1->key == e2->key);
 }
 
-void handle_get(string _k, Response *res)
+static void out_nil(Buffer *out)
+{
+    uint8_t tag = static_cast<uint8_t>(TAG_NIL);
+    buf_append(out, &tag, 1);
+}
+
+static void out_err(Buffer *out, uint8_t ERR_CODE, const string &res)
+{
+    uint8_t tag = static_cast<uint8_t>(TAG_ERR);
+    buf_append(out, &tag, 1);
+    buf_append(out, &ERR_CODE, 1);
+
+    size_t len = res.length();
+    buf_append(out, (uint8_t *)&len, 4);
+    buf_append(out, (const uint8_t *)res.data(), res.length());
+}
+
+static void out_str(Buffer *out, const uint8_t *str, size_t sz)
+{
+    uint8_t tag = static_cast<uint8_t>(TAG_STR);
+
+    buf_append(out, &tag, 1);
+    buf_append(out, (uint8_t *)&sz, 4);
+    buf_append(out, str, sz);
+}
+
+static void out_int(Buffer *out, uint64_t val)
+{
+    uint8_t tag = static_cast<uint8_t>(TAG_INT);
+    buf_append(out, &tag, 1);
+    buf_append(out, (uint8_t *)&val, 8); // sending 64bit int
+}
+
+static void out_arr(Buffer *out, uint32_t sz)
+{
+    uint8_t tag = static_cast<uint8_t>(TAG_ARR);
+    buf_append(out, &tag, 1);
+    buf_append(out, (uint8_t *)&sz, 4);
+}
+
+void handle_get(Buffer *out, string _k)
 {
     Entry e = {{}, _k};
     e.node = {NULL, str_hash((uint8_t *)_k.c_str(), _k.length())};
 
     HNode *hnode = hm_lookup(&(g_data.db), &(e.node), &eq);
-    res->status |= (hnode ? RES_OK : RES_NX);
-    if (hnode)
-    {
-        Entry *e = container_of(hnode, Entry, node);
-        res->data.assign(e->val.begin(), e->val.end());
-    }
+    if (!hnode)
+        return out_nil(out);
+
+    string str = container_of(hnode, Entry, node)->val;
+    out_str(out, (uint8_t *)str.data(), str.length());
 }
 
-void handle_set(string _k, string _v, Response *res)
+void handle_set(Buffer *out, string _k, string _v)
 {
     Entry e = {{}, _k, _v};
     e.node = {NULL, str_hash((uint8_t *)_k.c_str(), _k.length())};
@@ -218,11 +254,10 @@ void handle_set(string _k, string _v, Response *res)
         hm_insert(&(g_data.db), &(entry->node));
     }
 
-    res->data.assign(_v.begin(), _v.end());
-    res->status |= RES_OK;
+    return out_nil(out);
 }
 
-void handle_del(string _k, Response *res)
+void handle_del(Buffer *out, string _k)
 {
     Entry e = {{}, _k};
     e.node = {NULL, str_hash((uint8_t *)_k.c_str(), _k.length())};
@@ -231,39 +266,60 @@ void handle_del(string _k, Response *res)
     {
         to_del->next = NULL;
         delete container_of(to_del, Entry, node);
+        return out_int(out, 1);
     }
-    res->status |= RES_OK;
+    return out_int(out, 0);
 }
 
-static void handle_req(const vector<string> &cmd, Response *res)
+void req_st(Buffer *out)
 {
-    if (cmd[0] == "GET" && cmd.size() == 2)
+    size_t dummy_sz = 0;
+    buf_append(out, (uint8_t *)&dummy_sz, 4);
+}
+
+void req_en(Buffer *out)
+{
+    size_t final_sz = out->size() - 4; // 4 bytes for size
+    uint8_t *_pos_ = out->arr.data() + out->data_begin;
+
+    // if (final_sz > k_max_msg)
+    // {
+    //     fprintf(stderr, "response too long \n");
+    //     out->data_end = out->data_begin + 4;
+    //     return out_err(out, static_cast<uint8_t>(ERR_TOO_BIG), "invalid command !! \n");
+    // }
+    memcpy(_pos_, (uint32_t *)&final_sz, 4);
+}
+
+static void handle_req(Buffer *out, const vector<string> &cmd)
+{
+    if (cmd[0] == "get" && cmd.size() == 2)
     {
-        handle_get(cmd[1], res);
+        return handle_get(out, cmd[1]);
     }
-    else if (cmd[0] == "SET" && cmd.size() == 3)
+    if (cmd[0] == "set" && cmd.size() == 3)
     {
-        handle_set(cmd[1], cmd[2], res);
+        return handle_set(out, cmd[1], cmd[2]);
     }
-    else if (cmd[0] == "DEL" && cmd.size() == 2)
+    if (cmd[0] == "del" && cmd.size() == 2)
     {
-        handle_del(cmd[1], res);
+        return handle_del(out, cmd[1]);
     }
-    else
-        res->status |= RES_ERR;
+
+    return out_err(out, static_cast<uint8_t>(ERR_UNKNOWN), "invalid command !! \n");
 }
 
 static bool try_one_request(Conn *conn)
 {
-
-    Buffer *buffer = conn->incoming_buffer;
-    if (buffer->size() < 4)
+    Buffer *in_buffer = conn->incoming_buffer;
+    if (in_buffer->size() < 4)
         return false;
 
-    uint8_t *curr = buffer->arr.data() + buffer->data_begin;
+    uint8_t *curr = in_buffer->arr.data() + in_buffer->data_begin;
 
     uint32_t len; // total length of req
     memcpy(&len, curr, 4);
+
     if (len > k_max_msg)
     {
         fprintf(stderr, "msg too long !! \n");
@@ -273,17 +329,18 @@ static bool try_one_request(Conn *conn)
 
     curr += 4;
 
-    if (buffer->size() < len)
+    if (in_buffer->size() < 4 + len)
         return false;
 
     vector<string> cmd;
     parse_req(conn, cmd);
 
-    Response *res = new Response();
-    handle_req(cmd, res);
+    Buffer *out_buffer = conn->outgoing_buffer;
+    req_st(out_buffer); // saving first 4 bytes to store overall size
+    handle_req(out_buffer, cmd);
+    req_en(out_buffer); // will paste the overall size to output buffer
 
-    send_res(conn->outgoing_buffer, res);
-    buf_consume(buffer, size_t(len));
+    buf_consume(in_buffer, 4 + size_t(len));
 
     return true;
 }
