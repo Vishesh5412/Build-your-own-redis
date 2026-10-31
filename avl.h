@@ -14,7 +14,7 @@ struct AVLNode
 inline uint32_t avl_height(AVLNode *node)
 {
    if (node == NULL) return 0;
-   return (1 + (node->left ? (node->left)->h : 0) + (node->right ? (node->right)->h : 0));
+   return (1 + std::max(node->left ? (node->left)->h : 0, node->right ? (node->right)->h : 0));
 }
 
 inline uint32_t avl_cnt(AVLNode *node) {

@@ -21,6 +21,7 @@ static AVLNode *rotate_right(AVLNode *root)
     if (root == NULL)
         return NULL;
     AVLNode *new_root = root->left;
+
     assert(new_root);
     root->left = new_root ? new_root->right : NULL;
 
@@ -41,6 +42,7 @@ static AVLNode *rotate_left(AVLNode *root)
     if (root == NULL)
         return NULL;
     AVLNode *new_root = root->right;
+
     assert(new_root);
     root->right = new_root ? new_root->left : NULL;
 
@@ -50,6 +52,7 @@ static AVLNode *rotate_left(AVLNode *root)
     new_root->left = root;
 
     root->par = new_root;
+
     update(root);
     update(new_root);
     return new_root;
@@ -60,16 +63,18 @@ AVLNode *avl_fix_add(AVLNode *node)
     if (node == NULL)
         return NULL;
 
-    AVLNode *curr = node, *par = node->par;
+    AVLNode *prev = NULL, *curr = node, *par = node->par;
 
-    char dir[2];
-    size_t idx = 1;
+    char dir[2] = {'\0', '\0'};
 
     while (curr)
     {
         update(curr);
-
+        
+        dir[0] = prev ? ((prev == curr->left) ? 'L' : 'R') : '\0';
         int bf = getBF(curr);
+        AVLNode **from = par ? (curr == par->left) ? &(par->left) : &(par->right) : NULL;
+
         if (bf > 1)
         {
             if (dir[0] == 'L' && dir[1] == 'R')
@@ -89,10 +94,12 @@ AVLNode *avl_fix_add(AVLNode *node)
 
         if (!par)
             return curr;
+       
+        // a sliding window of size 2
+        dir[1] = dir[0];
 
-        dir[idx] = (curr == par->left) ? 'L' : 'R';
-        idx = (idx + 1) % 2; // toggle idx
-
+        *from = curr; // updating pointer from parent
+        prev = curr;
         curr = par;
         par = curr ? curr->par : NULL;
     }
