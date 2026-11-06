@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "util.h"
 struct HNode
 {
     HNode *next = NULL;
@@ -22,6 +23,13 @@ struct HMap
     HTab older;
     size_t migrate_pos = 0; // current bucket idx in tab waiting to migrate in newer
 };
+
+// inline bool eq(HNode *n1, HNode *n2)
+// {
+//     Entry *e1 = container_of(n1, Entry, node);
+//     Entry *e2 = container_of(n2, Entry, node);
+//     return (e1->key == e2->key);
+// }
 
 HNode *hm_lookup(HMap *hmap, HNode *key, bool (*eq)(HNode *, HNode *));
 void hm_insert(HMap *hmap, HNode *key);
