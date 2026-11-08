@@ -100,9 +100,7 @@ ZNode *zset_lookup(ZSet *zset, const char *str, size_t sz)
 
 static void zset_update(ZSet *zset, ZNode *znode, double score)
 {
-    AVLNode *new_root = avl_del(&znode->avl_node);
-    zset->root = new_root;
-
+    zset->root = avl_del(&znode->avl_node);
     znode->score = score;
     tree_add(zset, znode);
 }
@@ -113,12 +111,13 @@ bool zset_insert(ZSet *zset, const char *str, size_t sz, double score)
     if (node)
     {
         zset_update(zset, node, score);
+
         return false;
     }
 
     ZNode *znode = zset_new(str, sz, score);
     hm_insert(&zset->hmap, &znode->h_node);
-    // tree_add(zset, znode);
+    tree_add(zset, znode);
     
     return true;
 }
@@ -134,9 +133,6 @@ void zset_delete(ZSet *zset, ZNode *znode)
     hkey.sz = znode->sz;
 
     hm_delete(&(zset->hmap), &(hkey.node), &eq);
-    
-    // AVLNode *new_root = avl_del(&(znode->avl_node));
-    // zset->root = new_root;
-    // delete &znode->avl_node;
-    // delete znode;
+
+    zset->root = avl_del(&(znode->avl_node));
 }

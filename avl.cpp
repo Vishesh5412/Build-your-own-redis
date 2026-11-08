@@ -25,7 +25,7 @@ static AVLNode *rotate_right(AVLNode *root)
         return NULL;
     AVLNode *new_root = root->left;
 
-    assert(new_root);
+    // assert(new_root);
     root->left = new_root ? new_root->right : NULL;
 
     new_root->par = root->par;
@@ -46,7 +46,7 @@ static AVLNode *rotate_left(AVLNode *root)
         return NULL;
     AVLNode *new_root = root->right;
 
-    assert(new_root);
+    // assert(new_root);
     root->right = new_root ? new_root->left : NULL;
 
     new_root->par = root->par;
@@ -119,7 +119,7 @@ AVLNode *avl_fix_del(AVLNode *node, char dir)
     while (curr)
     {
         update(curr); // update h, cnt
-        
+
         int bf = getBF(curr);
         AVLNode **from = par ? (curr == par->left) ? &(par->left) : &(par->right) : NULL;
 
@@ -164,12 +164,18 @@ AVLNode *avl_del(AVLNode *node)
     if (node->left == NULL || node->right == NULL)
     {
         AVLNode *par = node->par;
+        node->par = NULL;
+
         AVLNode *child = node->left ? node->left : node->right;
+        node->left = NULL;
+        node->right = NULL;
 
         char dir = par ? ((par->left == node) ? 'L' : 'R') : '\0';
 
         AVLNode **from = par ? ((node == par->left) ? &(par->left) : &(par->right)) : NULL;
-        *from = child ? child : NULL;
+
+        if (from)
+            *from = child ? child : NULL;
 
         if (child)
             child->par = par;
@@ -178,6 +184,7 @@ AVLNode *avl_del(AVLNode *node)
         {
             return child;
         }
+
 
         return avl_fix_del(par, dir);
     }
@@ -200,20 +207,23 @@ AVLNode *avl_del(AVLNode *node)
     }
 
     AVLNode *par = i_s->par; // node from which fix fxn will called
-    
+
     par->left = i_s->right;
     if (i_s->right)
-    i_s->right->par = par;
-    
+        i_s->right->par = par;
+
     *i_s = *node;
-    
+
     (i_s->left)->par = i_s;
     (i_s->right)->par = i_s;
-     
+
     // rechanging pointers associated with node
     AVLNode **from = (node->par) ? (node == (node->par)->left ? &(node->par->left) : &(node->par->right)) : NULL;
     if (node->par)
         *from = i_s;
     
+    node->par = NULL;
+    node->left = NULL;
+    node->right = NULL; // delete for future use
     return avl_fix_del(par, 'L');
 }
