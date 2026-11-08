@@ -1,6 +1,7 @@
 #include <vector>
 #include <string>
 #include <map>
+#include <variant>
 
 #include <string.h>
 #include <assert.h>
@@ -13,6 +14,7 @@
 
 #include "hashtable.h"
 #include "util.h"
+#include "zset.h"
 
 #include <iostream>
 
@@ -56,6 +58,7 @@ enum
 {
     ERR_UNKNOWN = 1, // unknown command
     ERR_TOO_BIG = 2, // response too big
+    ERR_WRONG_ARG = 3,
 };
 
 enum
@@ -149,17 +152,25 @@ static void parse_req(const Conn *conn, vector<string> &cmd)
     }
 }
 
-// global states ie. might store more struct obj in future
 static struct
 {
     HMap db; // top-level hashtable
 } g_data;
 
+enum
+{
+    T_INIT = 0,
+    T_STR = 1,  // string
+    T_ZSET = 2, // sorted set
+};
+
 struct Entry
 {
     struct HNode node; // hashtable node
     string key;
-    string val;
+
+    uint32_t type = 0;
+    std::variant<std::string, ZSet> val;
 };
 
 // FNV hash
@@ -174,6 +185,14 @@ struct Entry
 // }
 
 // to check whether two node with same hash are actually same
+
+// a helper structure for the hashtable lookup ie. no need to create a temporary entry object
+struct LookupKey
+{
+    struct HNode node; // hashtable node
+    string str;
+};
+
 bool eq(HNode *n1, HNode *n2)
 {
     Entry *e1 = container_of(n1, Entry, node);
@@ -214,6 +233,13 @@ static void out_int(Buffer *out, uint64_t val)
     buf_append(out, (uint8_t *)&val, 8); // sending 64bit int
 }
 
+static void out_dbl(Buffer *out, double val)
+{
+    uint8_t tag = static_cast<uint8_t>(TAG_DBL);
+    buf_append(out, &tag, 1);
+    buf_append(out, (uint8_t *)&val, 8); // sending 64bit int
+}
+
 static void out_arr(Buffer *out, uint32_t sz)
 {
     uint8_t tag = static_cast<uint8_t>(TAG_ARR);
@@ -231,34 +257,46 @@ void cb_keys(void *buffer, HNode *hnode)
 
 void handle_get(Buffer *out, string _k)
 {
-    Entry e = {{}, _k};
-    e.node = {NULL, str_hash((uint8_t *)_k.c_str(), _k.length())};
+    LookupKey key = {{NULL, str_hash((uint8_t *)_k.data(), _k.length())}, _k};
 
-    HNode *hnode = hm_lookup(&(g_data.db), &(e.node), &eq);
+    HNode *hnode = hm_lookup(&(g_data.db), &(key.node), &eq);
     if (!hnode)
         return out_nil(out);
 
-    string str = container_of(hnode, Entry, node)->val;
+    Entry *entry = container_of(hnode, Entry, node);
+
+    if (entry->type != T_STR)
+    {
+        return out_err(out, ERR_UNKNOWN, "(str) expected !! \n");
+    }
+
+    string str = get<string>(entry->val);
     out_str(out, (uint8_t *)str.data(), str.length());
 }
 
 void handle_set(Buffer *out, string _k, string _v)
 {
-    Entry e = {{}, _k, _v};
-    e.node = {NULL, str_hash((uint8_t *)_k.c_str(), _k.length())};
-    HNode *hnode = hm_lookup(&(g_data.db), &(e.node), &eq);
+    LookupKey key = {{NULL, str_hash((uint8_t *)_k.data(), _k.length())}, _k};
 
-    // heap allocation req. instead of stack
-    Entry *entry = new Entry();
-    entry->node = {NULL, str_hash((uint8_t *)_k.c_str(), _k.length())};
+    HNode *hnode = hm_lookup(&(g_data.db), &(key.node), &eq);
+
     if (hnode)
     {
-        container_of(hnode, Entry, node)->val = _v;
+        Entry *entry = container_of(hnode, Entry, node);
+        if (entry->type != T_STR)
+        {
+            return out_err(out, ERR_UNKNOWN, "(str) expected !! \n");
+        }
+        entry->val = _v;
     }
     else
     {
+        Entry *entry = new Entry();
+        entry->node.hcode = str_hash((uint8_t *)_k.data(), _k.length());
         entry->key = _k;
+        entry->type = T_STR;
         entry->val = _v;
+
         hm_insert(&(g_data.db), &(entry->node));
     }
 
@@ -267,15 +305,16 @@ void handle_set(Buffer *out, string _k, string _v)
 
 void handle_del(Buffer *out, string _k)
 {
-    Entry e = {{}, _k};
-    e.node = {NULL, str_hash((uint8_t *)_k.c_str(), _k.length())};
-    HNode *to_del = hm_delete(&(g_data.db), &(e.node), &eq);
+    LookupKey key = {{NULL, str_hash((uint8_t *)_k.data(), _k.length())}, _k};
+
+    HNode *to_del = hm_delete(&(g_data.db), &(key.node), &eq);
     if (to_del)
     {
         to_del->next = NULL;
         delete container_of(to_del, Entry, node);
         return out_int(out, 1);
     }
+
     return out_int(out, 0);
 }
 
@@ -290,6 +329,114 @@ void handle_size(Buffer *out)
 {
     size_t sz = hm_size(&(g_data.db));
     out_int(out, (uint64_t)sz);
+}
+
+void handle_zadd(Buffer *out, const vector<string> &cmd)
+{ // zadd zset score name
+
+    double score;
+    try
+    {
+        score = stod(cmd[2]);
+    }
+    catch (const std::invalid_argument &e)
+    {
+        return out_err(out, static_cast<uint8_t>(ERR_WRONG_ARG), "(dbl) expected !! \n");
+    }
+    catch (const std::out_of_range &e)
+    {
+        return out_err(out, static_cast<uint8_t>(ERR_TOO_BIG), "out of range !! \n");
+    }
+
+    score = stod(cmd[2]);
+    LookupKey key = {{NULL, str_hash((uint8_t *)cmd[1].data(), cmd[1].length())}, cmd[1]};
+
+    HNode *hnode = hm_lookup(&(g_data.db), &(key.node), &eq);
+    if (hnode)
+    {
+        Entry *entry = container_of(hnode, Entry, node);
+        if (entry->type != T_ZSET)
+        {
+            return out_err(out, static_cast<uint8_t>(ERR_UNKNOWN), "(zset) exptected !! \n");
+        }
+
+        ZSet *_addr_ = &(get<ZSet>(entry->val));
+        zset_insert(_addr_, (char *)cmd[3].data(), cmd[3].length(), score);
+    }
+    else
+    {
+
+        Entry *entry = new Entry();
+
+        entry->node.hcode = key.node.hcode; // already computed above
+        entry->key = cmd[1];
+        entry->type = T_ZSET;
+
+        hm_insert(&(g_data.db), &(entry->node)); // pushing in outer most hashtable
+
+        // 1. This explicitly tells the variant to switch to ZSet and initializes it
+        // 2. Now you can safely take the address to pass to your function
+        ZSet *_addr_ = &(entry->val.emplace<ZSet>());
+        zset_insert(_addr_, (char *)cmd[3].data(), cmd[3].length(), score);
+    }
+    return out_nil(out);
+}
+
+static ZSet *get_zset(Buffer *out, string zset_name)
+{
+    LookupKey key = {{NULL, str_hash((uint8_t *)zset_name.data(), zset_name.length())}, zset_name};
+
+    HNode *hnode = hm_lookup(&(g_data.db), &(key.node), &eq);
+    if (!hnode)
+    {
+        out_nil(out);
+        return NULL;
+    }
+
+    Entry *entry = container_of(hnode, Entry, node);
+    if (entry->type != T_ZSET)
+    {
+        out_err(out, static_cast<uint8_t>(ERR_UNKNOWN), "(zset) expected !! \n");
+        return NULL;
+    }
+
+    ZSet *_addr_ = &(get<ZSet>(entry->val));
+    return _addr_;
+}
+
+void handle_zscore(Buffer *out, const vector<string> &cmd) // zscore zset name
+{
+    ZSet *zset = get_zset(out, cmd[1]);
+    if (!zset)
+        return;
+
+    ZNode *node = zset_lookup(zset, (char *)cmd[2].data(), cmd[2].length());
+    if (!node)
+    {
+        return out_nil(out);
+    }
+
+    double score = node->score;
+    return out_dbl(out, score);
+}
+
+void handle_zrem(Buffer *out, const vector<string> &cmd)
+{ // zrem zset name
+    ZSet *zset = get_zset(out, cmd[1]);
+    if (!zset)
+    return;
+    
+    ZNode *node = zset_lookup(zset, (char *)cmd[2].data(), cmd[2].length());
+    if (!node)
+    {
+        return out_nil(out);
+    }
+    
+    double score = node->score;
+    zset_delete(zset, node);
+
+    delete node;
+    return out_dbl(out, score);
 }
 
 void req_st(Buffer *out)
@@ -338,6 +485,19 @@ static void handle_req(Buffer *out, const vector<string> &cmd)
     {
         return handle_size(out);
     }
+    if (cmd[0] == "zadd" && cmd.size() == 4)
+    {
+        return handle_zadd(out, cmd);
+    }
+    if (cmd[0] == "zscore" && cmd.size() == 3)
+    {
+        return handle_zscore(out, cmd);
+    }
+    if (cmd[0] == "zrem" && cmd.size() == 3)
+    {
+        return handle_zrem(out, cmd);
+    }
+
     return out_err(out, static_cast<uint8_t>(ERR_UNKNOWN), "invalid command !! \n");
 }
 

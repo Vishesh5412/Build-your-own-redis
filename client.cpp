@@ -77,17 +77,17 @@ static int32_t send_req(int fd, vector<string> &cmd)
 
     for (string str : cmd)
         total_len += (4 + (uint32_t)str.length());
+
     if (total_len > max_len)
         return -1;
 
-    uint8_t w_buf[total_len] = {};
-    uint32_t nsts = (uint32_t)cmd.size();
-
+    uint8_t w_buf[total_len + 4] = {};
+    
     uint8_t *curr = w_buf;
     memcpy(curr, &total_len, 4);
     curr += 4;
-
-
+    
+    uint32_t nsts = (uint32_t)cmd.size();
     for (size_t i = 0; i < nsts; i++)
     {
         uint32_t len = (uint32_t)cmd[i].length();
@@ -221,6 +221,21 @@ static size_t read_res(int fd)
         printf("\n");
         return 1;
     }
+
+    case TAG_DBL:
+    {
+       if (sz < 1 + 8)
+        {
+            msg("bad response()");
+            return 1;
+        }
+
+        double val;
+        memcpy(&val, &r_buf[1], 8);
+        printf("(dbl) %f \n", val);
+        return 1;
+    }
+
     default:
         printf("bad response() \n");
     }
@@ -246,7 +261,7 @@ int main(int argc, char **argv)
     {
         die("connect()");
     }
-
+  
     vector<string> cmd;
     for (int i = 1; i < argc; i++)
     {

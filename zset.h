@@ -1,5 +1,6 @@
 #pragma once
 #include "avl.h"
+#include "hashtable.h"
 
 #include <string>
 // #include <bits/stdc++.h>
@@ -12,7 +13,7 @@ struct ZSet {
 };
 
 struct ZNode {
-   AVLNode *avl_node = NULL;
+   AVLNode avl_node;
    HNode h_node;
     
    double score = 0;
@@ -21,6 +22,7 @@ struct ZNode {
 };
 
 ZNode *zset_new(ZSet *zset, const char *str, size_t sz);
-ZNode *zset_lookup(ZSet *zset, const char *c, size_t sz);
-bool zset_insert(ZSet *zset, const char *c, size_t sz); // 
+ZNode *zset_lookup(ZSet *zset, const char *str, size_t sz);
+bool zset_insert(ZSet *zset, const char *str, size_t sz, double score);
 void zset_update(ZSet *zset, ZNode *znode, string str);
+void zset_delete(ZSet *zset, ZNode *znode);

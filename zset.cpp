@@ -1,10 +1,11 @@
-// #include <bits/stdc++.h>
+#include <bits/stdc++.h>
 #include <string.h>
 
 #include "zset.h"
-#include "avl.h"
+// #include "avl.h"
 #include "util.h"
 #include "hashtable.h"
+#include "avl.h"
 
 using namespace std;
 
@@ -26,20 +27,38 @@ static bool eq(HNode *n1, HNode *n2) // n1 stored in znode, n2 is pointer stored
     return (memcmp((void *)e1->str, (void *)e2->str, e1->sz) == 0); // strings are exactly same
 }
 
-// static void tree_add(Container &c, uint32_t val)
-static void tree_add(ZSet *zset, AVLNode *avl_node, double score)
+static void compare(ZNode *node, ZNode *new_node, AVLNode **from)
 {
+    size_t min_len = min(node->sz, new_node->sz);
+    for (size_t i = 0; i < min_len; i++)
+    {
+        if (node->str[i] == new_node->str[i])
+            continue;
+        *from = (new_node->str[i] < node->str[i]) ? (node->avl_node.left) : (node->avl_node.right);
+        return;
+    }
+    *from = node->avl_node.right;
+}
+
+static void tree_add(ZSet *zset, ZNode *new_node)
+{
+    AVLNode *avl_node = &(new_node->avl_node);
+
     AVLNode **from = &(zset->root), *curr = zset->root, *par = NULL;
     while (curr)
     {
         ZNode *znode = container_of(curr, ZNode, avl_node);
-        AVLNode *avl_node = znode->avl_node;
 
-        if (znode->score == score)
-            return;
+        if (znode->score == new_node->score)
+        {
+            compare(znode, new_node, from);
+        }
+        else
+        {
+            from = (znode->score > new_node->score) ? &(curr->left) : &(curr->right);
+        }
 
         par = curr;
-        from = (znode->score > score) ? &(avl_node->left) : &(avl_node->right);
         curr = *from;
     }
 
@@ -49,11 +68,10 @@ static void tree_add(ZSet *zset, AVLNode *avl_node, double score)
     zset->root = avl_fix_add(avl_node);
 }
 
-ZNode *zset_new(const char *str, size_t sz, double score)
+static ZNode *zset_new(const char *str, size_t sz, double score)
 {
     ZNode *znode = (ZNode *)calloc(1, sizeof(ZNode) + sz);
 
-    znode->avl_node = new AVLNode;
     znode->h_node.hcode = str_hash((const uint8_t *)str, sz);
 
     znode->score = score;
@@ -80,20 +98,45 @@ ZNode *zset_lookup(ZSet *zset, const char *str, size_t sz)
     return znode;
 }
 
+static void zset_update(ZSet *zset, ZNode *znode, double score)
+{
+    AVLNode *new_root = avl_del(&znode->avl_node);
+    zset->root = new_root;
+
+    znode->score = score;
+    tree_add(zset, znode);
+}
+
 bool zset_insert(ZSet *zset, const char *str, size_t sz, double score)
 {
-    if (zset_lookup(zset, str, sz))
+    ZNode *node = zset_lookup(zset, str, sz);
+    if (node)
     {
-        // zset update
+        zset_update(zset, node, score);
         return false;
     }
 
     ZNode *znode = zset_new(str, sz, score);
     hm_insert(&zset->hmap, &znode->h_node);
-    tree_add(zset, znode->avl_node, score);
+    // tree_add(zset, znode);
+    
     return true;
 }
 
-// ZNode *zset_lookup(ZSet *zset, const char *str, size_t sz) {
+void zset_delete(ZSet *zset, ZNode *znode)
+{
+    if (!znode)
+        return;
 
-// }
+    HKey hkey;
+    hkey.node.hcode = str_hash((uint8_t *)znode->str, znode->sz);
+    hkey.str = znode->str;
+    hkey.sz = znode->sz;
+
+    hm_delete(&(zset->hmap), &(hkey.node), &eq);
+    
+    // AVLNode *new_root = avl_del(&(znode->avl_node));
+    // zset->root = new_root;
+    // delete &znode->avl_node;
+    // delete znode;
+}

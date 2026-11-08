@@ -1,6 +1,5 @@
 #include <stdint.h>
 #include <stddef.h>
-#include "hashtable.h"
 
 #define container_of(ptr, T, member) \
     ((T *)((char *)ptr - offsetof(T, member)))
