@@ -26,3 +26,6 @@ ZNode *zset_lookup(ZSet *zset, const char *str, size_t sz);
 bool zset_insert(ZSet *zset, const char *str, size_t sz, double score);
 void zset_update(ZSet *zset, ZNode *znode, string str);
 void zset_delete(ZSet *zset, ZNode *znode);
+int64_t zset_rank(ZSet *zset, ZNode *znode);
+int64_t zset_count(ZSet *zset, double min_v, double max_v);
+

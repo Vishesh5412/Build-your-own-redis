@@ -359,7 +359,7 @@ void handle_zadd(Buffer *out, const vector<string> &cmd)
         {
             return out_err(out, static_cast<uint8_t>(ERR_UNKNOWN), "(zset) exptected !! \n");
         }
-       
+
         ZSet *_addr_ = &(get<ZSet>(entry->val));
         zset_insert(_addr_, (char *)cmd[3].data(), cmd[3].length(), score);
     }
@@ -424,19 +424,59 @@ void handle_zrem(Buffer *out, const vector<string> &cmd)
 { // zrem zset name
     ZSet *zset = get_zset(out, cmd[1]);
     if (!zset)
-    return;
-    
+        return;
+
     ZNode *node = zset_lookup(zset, (char *)cmd[2].data(), cmd[2].length());
     if (!node)
     {
         return out_nil(out);
     }
-    
+
     double score = node->score;
     zset_delete(zset, node);
 
     delete node;
     return out_dbl(out, score);
+}
+
+void handle_zrank(Buffer *out, const vector<string> &cmd)
+{ // zrank zset name
+    ZSet *zset = get_zset(out, cmd[1]);
+    if (!zset)
+        return;
+
+    ZNode *znode = zset_lookup(zset, (char *)cmd[2].data(), cmd[2].length());
+    if (!znode)
+        return out_nil(out);
+
+    int64_t rank = avl_rank(&znode->avl_node);
+    return out_int(out, rank);
+}
+
+void handle_zcount(Buffer *out, const vector<string> &cmd)
+{ // zcount zset min_v max_v
+    ZSet *zset = get_zset(out, cmd[1]);
+    if (!zset)
+        return;
+
+    double min_v, max_v;
+    try
+    {
+        min_v = stod(cmd[2]);
+        max_v = stod(cmd[3]);
+
+    }
+    catch (const std::invalid_argument &e)
+    {
+        return out_err(out, static_cast<uint8_t>(ERR_WRONG_ARG), "(dbl) expected !! \n");
+    }
+    catch (const std::out_of_range &e)
+    {
+        return out_err(out, static_cast<uint8_t>(ERR_TOO_BIG), "out of range !! \n");
+    }
+
+    int64_t count = zset_count(zset, min_v, max_v);
+    return out_int(out, count);
 }
 
 void req_st(Buffer *out)
@@ -496,6 +536,14 @@ static void handle_req(Buffer *out, const vector<string> &cmd)
     if (cmd[0] == "zrem" && cmd.size() == 3)
     {
         return handle_zrem(out, cmd);
+    }
+    if (cmd[0] == "zrank" && cmd.size() == 3)
+    {
+        return handle_zrank(out, cmd);
+    }
+    if (cmd[0] == "zcount" && cmd.size() == 4)
+    {
+        return handle_zcount(out, cmd);
     }
 
     return out_err(out, static_cast<uint8_t>(ERR_UNKNOWN), "invalid command !! \n");

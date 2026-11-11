@@ -68,6 +68,46 @@ static void tree_add(ZSet *zset, ZNode *new_node)
     zset->root = avl_fix_add(avl_node);
 }
 
+static ZNode *floor_or_equal(ZSet *zset, double score) { // find node with greatest score <= input score
+    if (zset == NULL) return NULL;
+
+    ZNode *ans = NULL;
+
+    AVLNode *curr = zset->root;
+    while(curr) {
+        ZNode *znode = container_of(curr, ZNode, avl_node);
+        
+        if (znode->score > score) {
+            curr = curr->left;
+        } else {
+            ans = znode;
+            curr = curr->right;
+        }
+    } 
+    
+    return ans;
+}
+
+static ZNode *ceil_or_equal(ZSet *zset, double score) { // find node with smallest score >= input score
+    if (zset == NULL) return NULL;
+
+    ZNode *ans = NULL;
+
+    AVLNode *curr = zset->root;
+    while(curr) {
+        ZNode *znode = container_of(curr, ZNode, avl_node);
+
+        if (znode->score >= score) {
+            ans = znode;
+            curr = curr->left;
+        } else {
+            curr = curr->right;
+        }
+    } 
+    
+    return ans;
+}
+
 static ZNode *zset_new(const char *str, size_t sz, double score)
 {
     ZNode *znode = (ZNode *)calloc(1, sizeof(ZNode) + sz);
@@ -136,3 +176,36 @@ void zset_delete(ZSet *zset, ZNode *znode)
 
     zset->root = avl_del(&(znode->avl_node));
 }
+
+int64_t zset_rank(ZSet *zset, ZNode *znode) { // rank of first tuple >= (score, name) 
+    if (zset == NULL || znode == NULL) return 0; // invalid
+    return avl_rank(&znode->avl_node);
+}
+
+int64_t zset_count(ZSet *zset, double min_v, double max_v) {
+    if (min_v > max_v) return 0;
+    
+    ZNode *znode1 = ceil_or_equal(zset, min_v); // for min_v
+    ZNode *znode2 = floor_or_equal(zset, max_v); // for max_v
+     
+    if (znode1 == NULL || znode2 == NULL) return 0;
+    return (zset_rank(zset, znode2) - zset_rank(zset, znode1) + 1);
+}
+
+// ZNode *znode_offset(ZNode *znode, uint32_t offset) {
+//     if (znode == NULL || offset < 1) return NULL;
+     
+//     AVLNode *root = &(znode->avl_node);
+
+//     uint32_t l_h = root->left ? (root->left)->cnt : 0;
+//     uint32_t r_h = root->right ? (root->right)->cnt : 0;
+
+//     if (offset == 1 + l_h) return znode;
+//     if (offset < 1 + l_h) {
+//         ZNode *znode_l = container_of(root->left, ZNode, avl_node);
+//         return znode_offset(znode_l, offset);
+//     }
+    
+//     ZNode *znode_r = container_of(root->right, ZNode, avl_node);
+//     return znode_offset(znode_r, offset - (l_h + 1));
+// }

@@ -227,3 +227,19 @@ AVLNode *avl_del(AVLNode *node)
     node->right = NULL; // delete for future use
     return avl_fix_del(par, 'L');
 }
+
+int64_t avl_rank(AVLNode *node) {
+    assert(node);
+
+    int64_t rank = (node->left) ? 1 + (node->left)->cnt : 1;
+    AVLNode *par = node->par, *curr = node;
+    while(par) {
+        if (curr == par->right) {
+            int64_t l_h = (par->left) ? (par->left)->cnt : 0;
+            rank += (l_h + 1);
+        } 
+        curr = par;
+        par = curr->par;
+    }
+    return rank;
+}

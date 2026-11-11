@@ -25,3 +25,4 @@ inline uint32_t avl_cnt(AVLNode *node) {
 
 AVLNode *avl_fix_add(AVLNode *node); // make sure tree is avl
 AVLNode *avl_del(AVLNode *node);
+int64_t avl_rank(AVLNode *node);
