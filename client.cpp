@@ -82,11 +82,11 @@ static int32_t send_req(int fd, vector<string> &cmd)
         return -1;
 
     uint8_t w_buf[total_len + 4] = {};
-    
+
     uint8_t *curr = w_buf;
     memcpy(curr, &total_len, 4);
     curr += 4;
-    
+
     uint32_t nsts = (uint32_t)cmd.size();
     for (size_t i = 0; i < nsts; i++)
     {
@@ -95,7 +95,7 @@ static int32_t send_req(int fd, vector<string> &cmd)
         memcpy(curr + 4, cmd[i].data(), len);
         curr += (4 + len);
     }
-    
+
     int32_t rv = write_all(fd, (char *)w_buf, 4 + total_len);
     if (rv)
     {
@@ -109,6 +109,7 @@ static size_t read_res(int fd)
 {
     uint32_t sz;
     int32_t rv = read_all(fd, (char *)&sz, 4); // read 4 bytes for total_length
+    // cout << "size is " << sz << endl;
 
     if (rv)
     {
@@ -198,7 +199,8 @@ static size_t read_res(int fd)
 
         uint32_t len;
         memcpy(&len, &r_buf[1], 4);
-        printf("(arr) ");
+
+        printf("(arr[%lu]) \n", (unsigned long)(len));
 
         if (len == 0)
             return 0;
@@ -208,15 +210,32 @@ static size_t read_res(int fd)
         {
             uint8_t TAG;
             memcpy(&TAG, &r_buf[_pos_], 1);
-
             _pos_ += 1;
-            uint32_t msg_len;
-            memcpy(&msg_len, &r_buf[_pos_], 4);
 
-            _pos_ += 4;
-            printf("%.*s ", msg_len, &r_buf[_pos_]);
+            if (TAG == TAG_INT)
+            {
+                uint64_t val;
+                memcpy(&val, &r_buf[_pos_], 8);
+                printf("(int) %ld \n",  val);
+                _pos_ += 8;
+            }
+            else if (TAG == TAG_DBL)
+            { 
+                double val;
+                memcpy(&val, &r_buf[_pos_], 8);
+                printf("(dbl) %f \n", val);
+                _pos_ += 8;
+            }
+            else
+            {
+                uint32_t msg_len;
+                memcpy(&msg_len, &r_buf[_pos_], 4);
+                _pos_ += 4;
 
-            _pos_ += msg_len;
+                printf("(str) %.*s \n", msg_len, &r_buf[_pos_]);
+                _pos_ += msg_len;
+            }
+
         }
         printf("\n");
         return 1;
@@ -224,7 +243,7 @@ static size_t read_res(int fd)
 
     case TAG_DBL:
     {
-       if (sz < 1 + 8)
+        if (sz < 1 + 8)
         {
             msg("bad response()");
             return 1;
@@ -261,7 +280,7 @@ int main(int argc, char **argv)
     {
         die("connect()");
     }
-  
+
     vector<string> cmd;
     for (int i = 1; i < argc; i++)
     {

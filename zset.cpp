@@ -27,19 +27,6 @@ static bool eq(HNode *n1, HNode *n2) // n1 stored in znode, n2 is pointer stored
     return (memcmp((void *)e1->str, (void *)e2->str, e1->sz) == 0); // strings are exactly same
 }
 
-static void compare(ZNode *node, ZNode *new_node, AVLNode **from)
-{
-    size_t min_len = min(node->sz, new_node->sz);
-    for (size_t i = 0; i < min_len; i++)
-    {
-        if (node->str[i] == new_node->str[i])
-            continue;
-        *from = (new_node->str[i] < node->str[i]) ? (node->avl_node.left) : (node->avl_node.right);
-        return;
-    }
-    *from = node->avl_node.right;
-}
-
 static void tree_add(ZSet *zset, ZNode *new_node)
 {
     AVLNode *avl_node = &(new_node->avl_node);
@@ -51,7 +38,10 @@ static void tree_add(ZSet *zset, ZNode *new_node)
 
         if (znode->score == new_node->score)
         {
-            compare(znode, new_node, from);
+            size_t min_len = min(znode->sz, new_node->sz);
+            int res = strncmp(znode->str, new_node->str, min_len);
+
+            from = (res > 0 || min_len == new_node->sz) ? &(znode->avl_node.left) : &(znode->avl_node.right);
         }
         else
         {
@@ -68,43 +58,77 @@ static void tree_add(ZSet *zset, ZNode *new_node)
     zset->root = avl_fix_add(avl_node);
 }
 
-static ZNode *floor_or_equal(ZSet *zset, double score) { // find node with greatest score <= input score
-    if (zset == NULL) return NULL;
+ZNode *floor_or_equal(ZSet *zset, double score, char *name, size_t sz)
+{
+    if (zset == NULL)
+        return NULL;
 
     ZNode *ans = NULL;
 
     AVLNode *curr = zset->root;
-    while(curr) {
+    while (curr)
+    {
         ZNode *znode = container_of(curr, ZNode, avl_node);
-        
-        if (znode->score > score) {
+
+        if (znode->score > score)
+        {
             curr = curr->left;
-        } else {
+        }
+        else if (znode->score < score || !name)
+        {
+
             ans = znode;
             curr = curr->right;
         }
-    } 
-    
+        else // score equal, name have to be lexically greater or equal than znode->str
+        {
+            size_t min_len = min(znode->sz, sz);
+            size_t max_len = max(znode->sz, sz);
+            if (strncmp(znode->str, name, min_len) <= 0 && max_len == sz)
+            {
+                ans = znode;
+                curr = curr->right;
+            }
+        }
+    }
+
     return ans;
 }
 
-static ZNode *ceil_or_equal(ZSet *zset, double score) { // find node with smallest score >= input score
-    if (zset == NULL) return NULL;
+ZNode *ceil_or_equal(ZSet *zset, double score, char *name, size_t sz)
+{ // find node with greatest score <= input (score, name), name = NULL refers to just find on basis of input (score) only
+    if (zset == NULL)
+        return NULL;
 
     ZNode *ans = NULL;
 
     AVLNode *curr = zset->root;
-    while(curr) {
+    while (curr)
+    {
         ZNode *znode = container_of(curr, ZNode, avl_node);
 
-        if (znode->score >= score) {
-            ans = znode;
-            curr = curr->left;
-        } else {
+        if (znode->score < score)
+        {
             curr = curr->right;
         }
-    } 
-    
+        else if (znode->score > score || !name)
+        {
+
+            ans = znode;
+            curr = curr->left;
+        }
+        else // score equal, znode->str have to be lexically greater or equal than name
+        {
+            size_t min_len = min(znode->sz, sz);
+            size_t max_len = max(znode->sz, sz);
+            if (strncmp(znode->str, name, min_len) >= 0 && max_len == znode->sz)
+            {
+                ans = znode;
+                curr = curr->right;
+            }
+        }
+    }
+
     return ans;
 }
 
@@ -158,7 +182,7 @@ bool zset_insert(ZSet *zset, const char *str, size_t sz, double score)
     ZNode *znode = zset_new(str, sz, score);
     hm_insert(&zset->hmap, &znode->h_node);
     tree_add(zset, znode);
-    
+
     return true;
 }
 
@@ -177,35 +201,55 @@ void zset_delete(ZSet *zset, ZNode *znode)
     zset->root = avl_del(&(znode->avl_node));
 }
 
-int64_t zset_rank(ZSet *zset, ZNode *znode) { // rank of first tuple >= (score, name) 
-    if (zset == NULL || znode == NULL) return 0; // invalid
+int64_t zset_rank(ZSet *zset, ZNode *znode)
+{ // rank of first tuple >= (score, name)
+    if (zset == NULL || znode == NULL)
+        return 0; // invalid
     return avl_rank(&znode->avl_node);
 }
 
-int64_t zset_count(ZSet *zset, double min_v, double max_v) {
-    if (min_v > max_v) return 0;
-    
-    ZNode *znode1 = ceil_or_equal(zset, min_v); // for min_v
+int64_t zset_count(ZSet *zset, double min_v, double max_v)
+{
+    if (min_v > max_v)
+        return 0;
+
+    ZNode *znode1 = ceil_or_equal(zset, min_v);  // for min_v
     ZNode *znode2 = floor_or_equal(zset, max_v); // for max_v
-     
-    if (znode1 == NULL || znode2 == NULL) return 0;
+
+    if (znode1 == NULL || znode2 == NULL)
+        return 0;
     return (zset_rank(zset, znode2) - zset_rank(zset, znode1) + 1);
 }
 
-// ZNode *znode_offset(ZNode *znode, uint32_t offset) {
-//     if (znode == NULL || offset < 1) return NULL;
-     
-//     AVLNode *root = &(znode->avl_node);
+ZNode *zset_offset(ZNode *znode, uint32_t offset)
+{
+    assert(znode);
+    if (offset == 0)
+        return znode;
 
-//     uint32_t l_h = root->left ? (root->left)->cnt : 0;
-//     uint32_t r_h = root->right ? (root->right)->cnt : 0;
+    AVLNode *root = &(znode->avl_node);
 
-//     if (offset == 1 + l_h) return znode;
-//     if (offset < 1 + l_h) {
-//         ZNode *znode_l = container_of(root->left, ZNode, avl_node);
-//         return znode_offset(znode_l, offset);
-//     }
-    
-//     ZNode *znode_r = container_of(root->right, ZNode, avl_node);
-//     return znode_offset(znode_r, offset - (l_h + 1));
-// }
+    uint32_t l_cnt = root->left ? (root->left)->cnt : 0;
+    uint32_t r_cnt = root->right ? (root->right)->cnt : 0;
+
+    if (r_cnt < offset)
+    {
+        AVLNode *par = root->par;
+        if (!par)
+            return NULL;
+
+        ZNode *z_par = container_of(par, ZNode, avl_node);
+        if (root == par->left)
+            return zset_offset(z_par, offset - (r_cnt + 1));
+
+        return zset_offset(z_par, offset + (l_cnt + 1));
+    }
+
+    // find inorder successor
+    root = root->right;
+    while (root->left)
+        root = root->left;
+
+    ZNode *z_right = container_of(root, ZNode, avl_node);
+    return zset_offset(z_right, offset - 1);
+}

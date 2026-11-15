@@ -173,18 +173,6 @@ struct Entry
     std::variant<std::string, ZSet> val;
 };
 
-// FNV hash
-// static uint64_t str_hash(const uint8_t *data, size_t len)
-// {
-//     uint32_t h = 0x811C9DC5;
-//     for (size_t i = 0; i < len; i++)
-//     {
-//         h = (h + data[i]) * 0x01000193; // it is fnv prime
-//     }
-//     return h;
-// }
-
-// to check whether two node with same hash are actually same
 
 // a helper structure for the hashtable lookup ie. no need to create a temporary entry object
 struct LookupKey
@@ -253,6 +241,28 @@ void cb_keys(void *buffer, HNode *hnode)
     Entry *entry = container_of(hnode, Entry, node);
     string _k = entry->key;
     out_str(out, (uint8_t *)_k.data(), _k.length());
+}
+
+bool extract_dbl(Buffer *out, string s, double *ptr)
+{
+    double score;
+    try
+    {
+        score = stod(s);
+    }
+    catch (const std::invalid_argument &e)
+    {
+        out_err(out, static_cast<uint8_t>(ERR_WRONG_ARG), "(dbl) expected !! \n");
+        return false;
+    }
+    catch (const std::out_of_range &e)
+    {
+        out_err(out, static_cast<uint8_t>(ERR_TOO_BIG), "out of range !! \n");
+        return false;
+    }
+
+    *ptr = score;
+    return true;
 }
 
 void handle_get(Buffer *out, string _k)
@@ -334,21 +344,10 @@ void handle_size(Buffer *out)
 void handle_zadd(Buffer *out, const vector<string> &cmd)
 { // zadd zset score name
 
-    double score;
-    try
-    {
-        score = stod(cmd[2]);
-    }
-    catch (const std::invalid_argument &e)
-    {
-        return out_err(out, static_cast<uint8_t>(ERR_WRONG_ARG), "(dbl) expected !! \n");
-    }
-    catch (const std::out_of_range &e)
-    {
-        return out_err(out, static_cast<uint8_t>(ERR_TOO_BIG), "out of range !! \n");
-    }
+    double score = -1;
+    if (!extract_dbl(out, cmd[2], &score))
+        return;
 
-    score = stod(cmd[2]);
     LookupKey key = {{NULL, str_hash((uint8_t *)cmd[1].data(), cmd[1].length())}, cmd[1]};
 
     HNode *hnode = hm_lookup(&(g_data.db), &(key.node), &eq);
@@ -460,23 +459,57 @@ void handle_zcount(Buffer *out, const vector<string> &cmd)
         return;
 
     double min_v, max_v;
-    try
-    {
-        min_v = stod(cmd[2]);
-        max_v = stod(cmd[3]);
-
-    }
-    catch (const std::invalid_argument &e)
-    {
-        return out_err(out, static_cast<uint8_t>(ERR_WRONG_ARG), "(dbl) expected !! \n");
-    }
-    catch (const std::out_of_range &e)
-    {
-        return out_err(out, static_cast<uint8_t>(ERR_TOO_BIG), "out of range !! \n");
-    }
+    if (!extract_dbl(out, cmd[2], &min_v))
+        return;
+    if (!extract_dbl(out, cmd[3], &max_v))
+        return;
 
     int64_t count = zset_count(zset, min_v, max_v);
     return out_int(out, count);
+}
+
+
+// size_t g_offset;
+
+void handle_zquery(Buffer *out, const vector<string> cmd) // zquery zset score name offset limit
+{
+    ZSet *zset = get_zset(out, cmd[1]);
+    if (!zset)
+        return;
+
+    double score;
+    if (!extract_dbl(out, cmd[2], &score))
+        return;
+
+    ZNode *z_node = ceil_or_equal(zset, score, (char *)cmd[3].data(), cmd[3].length());
+
+    if (!z_node)
+        return out_arr(out, 0);
+
+    int offset = stoi(cmd[4]); // add safety featuers
+    int limit = stoi(cmd[5]);  // add safety featuers
+
+    ZNode *curr_node = zset_offset(z_node, offset);
+
+    uint8_t tag = static_cast<uint8_t>(TAG_ARR);
+    buf_append(out, &tag, 1);
+    
+    size_t addr_offset = out->size();
+
+    size_t sz = 0;
+    buf_append(out, (uint8_t *)&sz, 4); // dummy arr length
+
+    while (curr_node && limit > 0)
+    {
+        out_str(out, (uint8_t *)&curr_node->str, curr_node->sz);
+        out_dbl(out, curr_node->score);
+        curr_node = zset_offset(curr_node, 1);
+        limit--;
+
+        sz += 2;
+    }
+
+    memcpy(out->arr.data() + addr_offset, (uint32_t *)&sz, 4);
 }
 
 void req_st(Buffer *out)
@@ -544,6 +577,10 @@ static void handle_req(Buffer *out, const vector<string> &cmd)
     if (cmd[0] == "zcount" && cmd.size() == 4)
     {
         return handle_zcount(out, cmd);
+    }
+    if (cmd[0] == "zquery" && cmd.size() == 6)
+    {
+        return handle_zquery(out, cmd);
     }
 
     return out_err(out, static_cast<uint8_t>(ERR_UNKNOWN), "invalid command !! \n");
