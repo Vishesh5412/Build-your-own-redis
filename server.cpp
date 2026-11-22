@@ -173,7 +173,6 @@ struct Entry
     std::variant<std::string, ZSet> val;
 };
 
-
 // a helper structure for the hashtable lookup ie. no need to create a temporary entry object
 struct LookupKey
 {
@@ -243,12 +242,36 @@ void cb_keys(void *buffer, HNode *hnode)
     out_str(out, (uint8_t *)_k.data(), _k.length());
 }
 
-bool extract_dbl(Buffer *out, string s, double *ptr)
+bool extract_int(Buffer *out, string s, uint32_t *ptr)
 {
-    double score;
+    for (char c : s)
+    {
+        if (c < '0' || c > '9')
+        {
+
+            out_err(out, static_cast<uint8_t>(ERR_WRONG_ARG), "(int) expected !! \n");
+            return false;
+        }
+    }
+
     try
     {
-        score = stod(s);
+        *ptr = stoi(s);
+    }
+    catch (const std::out_of_range &e)
+    {
+        out_err(out, static_cast<uint8_t>(ERR_TOO_BIG), "out of range !! \n");
+        return false;
+    }
+
+    return true;
+}
+
+bool extract_dbl(Buffer *out, string s, double *ptr)
+{
+    try
+    {
+        *ptr = stod(s);
     }
     catch (const std::invalid_argument &e)
     {
@@ -261,7 +284,34 @@ bool extract_dbl(Buffer *out, string s, double *ptr)
         return false;
     }
 
-    *ptr = score;
+    size_t len = s.length();
+
+    int i = 1;
+    while (i < len && s[i] != '.') {
+        if (s[i] < '0' || s[i] > '9')
+        {
+
+            out_err(out, static_cast<uint8_t>(ERR_WRONG_ARG), "(dbl) expected !! \n");
+            return false;
+        }
+        i++;
+    }
+
+    if (i == s.length())
+        return true;
+
+    i = i + 1;
+    while (i < len)
+    {
+        if (s[i] < '0' || s[i] > '9')
+        {
+
+            out_err(out, static_cast<uint8_t>(ERR_WRONG_ARG), "(dbl) expected !! \n");
+            return false;
+        }
+        i++;
+    }
+
     return true;
 }
 
@@ -344,7 +394,7 @@ void handle_size(Buffer *out)
 void handle_zadd(Buffer *out, const vector<string> &cmd)
 { // zadd zset score name
 
-    double score = -1;
+    double score;
     if (!extract_dbl(out, cmd[2], &score))
         return;
 
@@ -468,10 +518,7 @@ void handle_zcount(Buffer *out, const vector<string> &cmd)
     return out_int(out, count);
 }
 
-
-// size_t g_offset;
-
-void handle_zquery(Buffer *out, const vector<string> cmd) // zquery zset score name offset limit
+void handle_zquery(Buffer *out, const vector<string> &cmd) // zquery zset score name offset limit
 {
     ZSet *zset = get_zset(out, cmd[1]);
     if (!zset)
@@ -486,14 +533,19 @@ void handle_zquery(Buffer *out, const vector<string> cmd) // zquery zset score n
     if (!z_node)
         return out_arr(out, 0);
 
-    int offset = stoi(cmd[4]); // add safety featuers
-    int limit = stoi(cmd[5]);  // add safety featuers
+    uint32_t offset, limit;
+
+    if (!extract_int(out, cmd[4], &offset))
+        return;
+
+    if (!extract_int(out, cmd[5], &limit))
+        return;
 
     ZNode *curr_node = zset_offset(z_node, offset);
 
     uint8_t tag = static_cast<uint8_t>(TAG_ARR);
     buf_append(out, &tag, 1);
-    
+
     size_t addr_offset = out->size();
 
     size_t sz = 0;
@@ -510,6 +562,12 @@ void handle_zquery(Buffer *out, const vector<string> cmd) // zquery zset score n
     }
 
     memcpy(out->arr.data() + addr_offset, (uint32_t *)&sz, 4);
+}
+
+void handle_zcard(Buffer *out, const vector<string> &cmd)
+{ // zscard key
+    ZSet *zset = get_zset(out, cmd[1]);
+    return zset ? out_int(out, zset->root->cnt) : out_int(out, 0);
 }
 
 void req_st(Buffer *out)
@@ -538,49 +596,53 @@ static void handle_req(Buffer *out, const vector<string> &cmd)
     {
         return out_err(out, static_cast<uint8_t>(ERR_UNKNOWN), "invalid command !! \n");
     }
-    if (cmd[0] == "get" && cmd.size() == 2)
+    if (cmd[0] == "get" && cmd.size() == 2) // get a key
     {
         return handle_get(out, cmd[1]);
     }
-    if (cmd[0] == "set" && cmd.size() == 3)
+    if (cmd[0] == "set" && cmd.size() == 3) // insert a key
     {
         return handle_set(out, cmd[1], cmd[2]);
     }
-    if (cmd[0] == "del" && cmd.size() == 2)
+    if (cmd[0] == "del" && cmd.size() == 2) // del a key
     {
         return handle_del(out, cmd[1]);
     }
-    if (cmd[0] == "keys" && cmd.size() == 1)
+    if (cmd[0] == "keys" && cmd.size() == 1) // return all keys
     {
         return handle_keys(out);
     }
-    if (cmd[0] == "size" && cmd.size() == 1)
+    if (cmd[0] == "size" && cmd.size() == 1) // total no of keys
     {
         return handle_size(out);
     }
-    if (cmd[0] == "zadd" && cmd.size() == 4)
+    if (cmd[0] == "zadd" && cmd.size() == 4) // add (score, name) tuple in sorted_set
     {
         return handle_zadd(out, cmd);
     }
-    if (cmd[0] == "zscore" && cmd.size() == 3)
+    if (cmd[0] == "zscore" && cmd.size() == 3) // fetch score of (name) in sorted_set
     {
         return handle_zscore(out, cmd);
     }
-    if (cmd[0] == "zrem" && cmd.size() == 3)
+    if (cmd[0] == "zrem" && cmd.size() == 3) // del (score, name) tuple in sorted_set
     {
         return handle_zrem(out, cmd);
     }
-    if (cmd[0] == "zrank" && cmd.size() == 3)
+    if (cmd[0] == "zrank" && cmd.size() == 3) // rank of (score, name) in sorted_set asc_order
     {
         return handle_zrank(out, cmd);
     }
-    if (cmd[0] == "zcount" && cmd.size() == 4)
+    if (cmd[0] == "zcount" && cmd.size() == 4) // total no of tuples whose score lie in [min, max]
     {
         return handle_zcount(out, cmd);
     }
-    if (cmd[0] == "zquery" && cmd.size() == 6)
+    if (cmd[0] == "zquery" && cmd.size() == 6) // fetch a fix no of tuples at rank >= (offset + ${rank_of(score, name)})
     {
         return handle_zquery(out, cmd);
+    }
+    if (cmd[0] == "zcard" && cmd.size() == 2) // size of a zset
+    {
+        return handle_zcard(out, cmd);
     }
 
     return out_err(out, static_cast<uint8_t>(ERR_UNKNOWN), "invalid command !! \n");
